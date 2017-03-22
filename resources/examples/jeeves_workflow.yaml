@@ -1,0 +1,49 @@
+bla:
+  env:
+    image: centos:latest
+  pre: |
+    #!/bin/bash
+    echo "bla pre-script"
+  script: |
+    #!/bin/bash
+    echo "bla script"
+    echo $TEST_PUBLISH
+    echo $TEST
+
+  dependencies: ['publish']
+
+install:
+  env:
+    image: centos:latest
+  pre: |
+    #!/bin/bash
+    echo "install pre-script"
+    echo $TEST
+    export TEST=SUCCCESS
+    echo $TEST
+  script: |
+    #!/bin/bash
+    echo "install script"
+    echo $TEST
+    export TEST=SUCCCESS_INSTALL
+    echo $TEST
+
+  dependencies: []
+
+publish:
+  env:
+    image: centos:latest
+  pre: |
+    #!/bin/bash
+    echo "publish pre-script"
+    export TEST_PUBLISH=SUCCCESS_PUBLISH
+    echo $TEST_PUBLISH
+  script: |
+    #!/bin/bash
+    echo "publish script"
+    echo $TEST
+    echo $TEST_PUBLISH
+
+  dependencies: ['install']
+
+

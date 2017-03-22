@@ -1,0 +1,296 @@
+import os
+import yaml
+import json
+import uuid
+import shlex
+import socket
+import logging
+import datetime
+from time import sleep
+from tempfile import gettempdir
+
+from jeeves_commons.storage.storage import (get_storage_client,
+                                            create_storage_client)
+from jeeves_commons.storage import utils as storage_utils
+
+from jeeves_commons.dsl import parser
+from jeeves_commons.queue import publisher
+from jeeves_commons.utils import open_channel, create_logger
+from jeeves_commons.constants import (NUM_MINION_WORKERS_ENV,
+                                      RABBITMQ_HOST_IP_ENV,
+                                      RABBITMQ_HOST_PORT_ENV,
+                                      RABBITMQ_USERNAME_ENV,
+                                      RABBITMQ_PASSWORD_ENV,
+                                      POSTGRES_HOST_IP_ENV,
+                                      POSTGRES_HOST_PORT_ENV,
+                                      POSTGRES_USERNAME_ENV,
+                                      POSTGRES_PASSWORD_ENV,
+                                      DEFAULT_BROKER_PORT,
+                                      DEFAULT_POSTGRES_PORT,
+                                      POSTGRES_RESULTS_DB,
+                                      MINION_TASKS_QUEUE)
+
+
+from jeeves_minion.docker_exec import DockerExecClient, DockerExecException
+
+from celery import Celery, bootsteps
+from celery.signals import worker_process_init
+from kombu import Consumer
+
+logger = create_logger('minion_logger',
+                       level=logging.DEBUG)
+
+# Get the number of workers per Jeeves minion. Default is set to 4.
+NUM_MINION_WORKERS = os.getenv(NUM_MINION_WORKERS_ENV, '4')
+
+CELERY_START_COMMAND = 'celery -A minion worker --concurrency {0} ' \
+                       '--config jeeves_minion.celeryconfig ' \
+                       '--logfile=/tmp/celery_logs.log ' \
+                       '--prefetch-multiplier=1' \
+                       .format(NUM_MINION_WORKERS)
+
+# Get message broker details
+MESSAGE_BROKER_HOST_IP = os.getenv(RABBITMQ_HOST_IP_ENV, '172.17.0.3')
+MESSAGE_BROKER_HOST_PORT = os.getenv(RABBITMQ_HOST_PORT_ENV,
+                                     DEFAULT_BROKER_PORT)
+MESSAGE_BROKER_USERNAME = os.getenv(RABBITMQ_USERNAME_ENV, 'guest')
+MESSAGE_BROKER_PASSWORD = os.getenv(RABBITMQ_PASSWORD_ENV, 'guest')
+
+# Get the result handler details
+RESULTS_BACKEND_HOST_IP = os.getenv(POSTGRES_HOST_IP_ENV, '172.17.0.2')
+RESULTS_BACKEND_HOST_PORT = os.getenv(POSTGRES_HOST_PORT_ENV,
+                                      DEFAULT_POSTGRES_PORT)
+RESULTS_BACKEND_USERNAME = os.getenv(POSTGRES_USERNAME_ENV, 'postgres')
+RESULTS_BACKEND_PASSWORD = os.getenv(POSTGRES_PASSWORD_ENV, 'postgres')
+
+broker_url = 'amqp://{0}:{1}@{2}:{3}//'.format(MESSAGE_BROKER_USERNAME,
+                                               MESSAGE_BROKER_PASSWORD,
+                                               MESSAGE_BROKER_HOST_IP,
+                                               MESSAGE_BROKER_HOST_PORT)
+
+backend_url = 'db+postgresql://{0}:{1}@{2}:{3}/{4}'.format(
+                                                RESULTS_BACKEND_USERNAME,
+                                                RESULTS_BACKEND_PASSWORD,
+                                                RESULTS_BACKEND_HOST_IP,
+                                                RESULTS_BACKEND_HOST_PORT,
+                                                POSTGRES_RESULTS_DB)
+
+app = Celery(broker=broker_url,
+             backend=backend_url)
+
+
+@worker_process_init.connect
+def fix_multiprocessing(**kwargs):
+    from multiprocessing import current_process
+    keys = {
+        '_authkey': '',
+        '_daemonic': False,
+        '_tempdir': ''
+        }
+    for k, v in keys.items():
+        try:
+            getattr(current_process(), k)
+        except AttributeError:
+            setattr(current_process(), k, v)
+
+
+# TODO: another task for stashing logs? in future..
+
+@app.task(name="run_script_in_container", max_retries=1)
+def execute_install_task(task_id):
+    from jeeves_commons.storage.storage import create_storage_client
+    storage_client = create_storage_client()
+
+    task = storage_client.tasks.get(task_id=task_id)
+    dependencies = json.loads(task.task_dependencies)
+    task_obj = parser.get_task(json.loads(task.content))
+
+    workdir = os.path.join(gettempdir(), task.workflow_id, task.task_id)
+    log_file = os.path.join(workdir, '{0}.log'.format(task.task_id))
+    exec_client = DockerExecClient(base_image=task_obj.env.image,
+                                   workdir=workdir,
+                                   log_file=log_file)
+
+    try:
+        env = json.loads(storage_client.workflows.get(task.workflow_id).env)
+        logger.debug('Executing pre-script for task \'{0}\' with ID {1}. '
+                     'Env is: {2}'
+                     .format(task.task_name, task.task_id, str(env)))
+        pre_logs, pre_env = exec_client.run_script(
+            task_obj.pre_script,
+            env=env)
+
+        # Wait for task dependencies
+        logger.debug('Waiting for task {0} dependencies {1}...'
+                     .format(task.task_name, task.task_dependencies))
+        succeeded, failed = wait_for_tasks(dependencies, storage_client)
+        logger.debug('Dependency results are (success: {0}, failure: {1})'
+                     .format(succeeded, failed))
+        if not failed:
+            env = json.loads(storage_client.workflows.get(task.workflow_id)
+                             .env_result)
+            env.update(pre_env)
+            # Run script
+            logger.debug('executing script for task \'{0}\' with ID {1}'
+                         .format(task.task_name, task.task_id))
+            script_logs, script_env = exec_client.run_script(
+                task_obj.script,
+                env=env)
+
+            _handle_execution_success(task, script_env, storage_client)
+            logger.debug('Task {} ended successfully'.format(task.task_name))
+        else:
+            msg = 'One or more task dependencies failed \'{0}\'.' \
+                  ' Skipping execution of {1}.'.format(str(failed),
+                                                       task.task_name)
+            logger.info(msg)
+            raise RuntimeError(msg)
+    except DockerExecException as e:
+        logger.info(e.message)
+        storage_client.tasks.update(task_id=task.task_id,
+                                    status='FAILURE',
+                                    result=e.result)
+        _handle_execution_error(task, storage_client)
+        raise RuntimeError(e.message)
+    finally:
+        storage_client.close()
+        exec_client.close()
+
+    output = '{pre_logs}\n{script_logs}'.format(pre_logs=pre_logs,
+                                                script_logs=script_logs)
+    return output
+
+
+def _handle_execution_error(failed_task, storage_client):
+    logger.debug('Revoking task tree for task {0}'.format(failed_task.task_id))
+    publisher.revoke_task_tree(failed_task)
+    storage_client.workflows.update(workflow_id=failed_task.workflow_id,
+                                    status='FAILURE')
+
+
+def _handle_execution_success(task, env, storage_client):
+    workflow = storage_client.workflows.get(workflow_id=task.workflow_id)
+    workflow_env = json.loads(workflow.env_result)
+    workflow_env.update(env)
+
+    workflow_status = None
+    succeeded_tasks = storage_client.tasks.list(task.workflow_id,
+                                                status='SUCCESS')
+    if len(workflow.tasks) == len(succeeded_tasks) + 1:
+        workflow_status = 'SUCCESS'
+
+    storage_client.workflows.update(task.workflow_id,
+                                    env_result=json.dumps(workflow_env),
+                                    status=workflow_status)
+
+
+def wait_for_tasks(task_ids, storage_client):
+    if not task_ids:
+        return [], []
+
+    while True:
+        succeeded, failed = _dependency_results(task_ids, storage_client)
+        logger.debug('Failed: {0}. Success: {1}'.format(str(failed),
+                                                        str(succeeded)))
+        if len(succeeded) == len(task_ids) or len(failed) > 0:
+            return succeeded, failed
+
+        sleep(0.5)
+
+
+def _dependency_results(dependencies, storage_client):
+    succeeded = []
+    failed = []
+    for task_id in dependencies:
+        task_item = storage_client.tasks.get(task_id)
+        logger.debug('Task {0} status is: {1}'.format(task_item.task_name,
+                                                      task_item.status))
+        if task_item.status in ['FAILURE', 'REVOKED']:
+            failed.append(task_item.task_name)
+        elif task_item.status == 'SUCCESS':
+            succeeded.append(task_item.task_name)
+
+    return succeeded, failed
+
+
+class MinionConsumerStep(bootsteps.ConsumerStep):
+
+    def get_consumers(self, channel):
+        return [Consumer(channel,
+                         queues=[publisher.tasks_queue],
+                         callbacks=[self.handle_message],
+                         accept=['json'])]
+
+    def handle_message(self, body, message):
+        task = get_storage_client().tasks.get(task_id=body)
+        if task.status == 'REVOKED_MANUALLY':
+            logger.debug('Task with ID {0} was manually revoked'.format(body))
+            message.ack()
+            return
+
+        # Execute task async
+        execute_install_task.apply_async(
+                                   args=[task.task_id],
+                                   task_id=task.task_id)
+        # Update the task status
+        get_storage_client().tasks.update(
+            task_id=task.task_id,
+            status='STARTED',
+            started_at=str(datetime.datetime.now()),
+            minion_ip=socket.gethostbyname(socket.gethostname()))
+
+        workflow = get_storage_client().workflows.get(task.workflow_id)
+        if workflow.status not in ('FAILURE', 'SUCCESS', 'STARTED', 'REVOKED'):
+            # Update the workflow status
+            get_storage_client().workflows.update(
+                task.workflow_id,
+                status='STARTED',
+                started_at=str(datetime.datetime.now()))
+
+        message.ack()
+
+
+app.steps['consumer'].add(MinionConsumerStep)
+
+
+class MinionBootstrapper(object):
+    def __init__(self, app):
+        self.app = app
+        # init minion ip address
+        self.minion_ip = socket.gethostbyname(socket.gethostname())
+        # Create a minion queue
+        self._create_queue()
+
+    def _create_queue(self):
+        with open_channel(MESSAGE_BROKER_HOST_IP,
+                          MESSAGE_BROKER_HOST_PORT) as _channel:
+            _channel.queue_declare(queue=MINION_TASKS_QUEUE,
+                                   durable=True)
+
+        storage = create_storage_client()
+        if not storage.minions.get(minion_ip=self.minion_ip):
+            storage.minions.create(minion_ip=self.minion_ip,
+                                   status='STARTED')
+        storage.close()
+
+    def start(self):
+        self.app.start(shlex.split(CELERY_START_COMMAND))
+
+
+if __name__ == '__main__':
+    # from jeeves_commons.storage import database
+    # database.init_db()
+    bs = MinionBootstrapper(app)
+    for i in range(1):
+        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                               '../resources/examples',
+                               'jeeves_workflow.yaml'),
+                  'r') as workflow_stream:
+            workflow = yaml.load(workflow_stream)
+        workflow_id = str(uuid.uuid4())
+        _, tasks = storage_utils.create_workflow(get_storage_client(),
+                                                 workflow,
+                                                 workflow_id=workflow_id)
+        for task_item in tasks:
+            publisher.send_task_message(task_item.task_id)
+    bs.start()
