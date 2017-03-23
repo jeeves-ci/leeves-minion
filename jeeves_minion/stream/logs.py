@@ -3,11 +3,11 @@ import logging
 from multiprocessing import Process
 from contextlib import contextmanager
 
-
 import tornado.httpserver
 import tornado.ioloop
 import tornado.web
 import tornado.websocket
+import tornado.options
 from tornado.process import Subprocess
 
 
@@ -17,42 +17,69 @@ class IndexHandler(tornado.web.RequestHandler):
 
 
 class SocketHandler(tornado.websocket.WebSocketHandler):
-    clients = set()
-    tail_proc = None
+    clients = {}
+    tail_procs = {}
     cat_proc = None
-    log_path = None
 
     def __init__(self, *args, **kwargs):
-        SocketHandler.log_path = kwargs.get('log_path')
-        if not self.log_path:
-            raise RuntimeError('Log file path was not provided. '
-                               'Socket closed.')
-        kwargs.pop('log_path')
+        self.task_id = None
         super(SocketHandler, self).__init__(*args, **kwargs)
 
-    @staticmethod
-    def send_to_all(message):
-        for c in SocketHandler.clients:
+    def send_to_all(self, message):
+        for c in SocketHandler.clients.get(self.task_id):
             c.write_message(message)
 
-    def open(self):
-        self._send_existing_data()
+    def open(self, workflow_id, task_id):
+        self.task_id = task_id
+        log_path = self._get_log_path(workflow_id, task_id)
+        if not os.path.isfile(log_path):
+            self._create_log_file()
+        self._send_existing_data(log_path)
 
-        SocketHandler.clients.add(self)
-        if not SocketHandler.tail_proc:
-            self._start_data_stream()
+        self._add_client()
+        if not SocketHandler.tail_procs.get(task_id):
+            self._start_data_stream(log_path)
 
-    def _start_data_stream(self):
-        SocketHandler.tail_proc = Subprocess(
-            ['tail', '-f', SocketHandler.log_path, '-n', '0'],
+    @staticmethod
+    def _get_log_path(workflow_id, task_id):
+        return os.path.join('/tmp',
+                            workflow_id,
+                            task_id,
+                            '{}.log'.format(task_id))
+
+    def _add_client(self):
+        clients = SocketHandler.clients.get(self.task_id, set())
+        clients.add(self)
+        SocketHandler.clients[self.task_id] = clients
+
+    def _remove_client(self):
+        clients = SocketHandler.clients.get(self.task_id)
+        clients.remove(self)
+        SocketHandler.clients[self.task_id] = clients
+
+    @staticmethod
+    def _add_proc(task_id, proc):
+        SocketHandler.tail_procs[task_id] = proc
+
+    def _remove_proc(self):
+        proc = SocketHandler.tail_procs.get(self.task_id)
+        if proc:
+            proc.proc.terminate()
+            proc.proc.wait()
+        SocketHandler.tail_procs[self.task_id] = None
+
+    def _start_data_stream(self, log_path):
+        tail_proc = Subprocess(
+            ['tail', '-f', log_path, '-n', '0'],
             stdout=Subprocess.STREAM,
             bufsize=1)
-        SocketHandler.tail_proc.set_exit_callback(self._close)
-        SocketHandler.tail_proc.stdout.read_until('\n',
-                                                  self.write_line_to_clients)
+        tail_proc.set_exit_callback(self._close)
+        self._add_proc(self.task_id, tail_proc)
+        tail_proc.stdout.read_until('\n', self.write_line_to_clients)
 
-    def _send_existing_data(self):
-        SocketHandler.cat_proc = Subprocess(['cat', self.log_path],
+    def _send_existing_data(self, log_file):
+
+        SocketHandler.cat_proc = Subprocess(['cat', log_file],
                                             stdout=Subprocess.STREAM,
                                             bufsize=1)
         SocketHandler.cat_proc.stdout.read_until_close(
@@ -61,33 +88,25 @@ class SocketHandler(tornado.websocket.WebSocketHandler):
         SocketHandler.cat_proc = None
 
     def _close(self, *args, **kwargs):
-        self.close()
+        self.close(*args, **kwargs)
 
     def on_close(self, *args, **kwargs):
-        SocketHandler.clients.remove(self)
-        if len(SocketHandler.clients) == 0:
+
+        self._remove_client()
+        if len(SocketHandler.clients.get(self.task_id)) == 0:
             logging.info('All clients disconnected. Killing tail process for '
-                         'log {0}'.format(self.log_path))
-            SocketHandler.tail_proc.proc.terminate()
-            SocketHandler.tail_proc.proc.wait()
-            SocketHandler.tail_proc = None
+                         'task {0}'.format(self.task_id))
+            self._remove_proc()
 
     def write_line_to_clients(self, data):
-        logging.info("Returning to clients: %s" % data.strip())
-        SocketHandler.send_to_all(data.strip() + '<br/>')
-        SocketHandler.tail_proc.stdout.read_until('\n',
-                                                  self.write_line_to_clients)
+        logging.info('Returning to clients: %s' % data.strip())
+        self.send_to_all(data.strip() + '<br/>')
+        tail_proc = SocketHandler.tail_procs.get(self.task_id)
+        tail_proc.stdout.read_until('\n', self.write_line_to_clients)
 
     def write_line_to_client(self, data):
-        logging.info("Returning to client: %s" % data.strip())
+        logging.info('Returning to client: %s' % data.strip())
         self.write_message(data.strip().replace('\n', '<br/>') + '<br/>')
-
-
-class LogStreamHttpServer(object):
-
-    def __init__(self, create_file=True):
-        self.create_file = create_file
-        self.tornado_proc = None
 
     @staticmethod
     def _create_log_file(log_path):
@@ -96,11 +115,17 @@ class LogStreamHttpServer(object):
                 os.makedirs(os.path.dirname(log_path))
             open(log_path, 'a').close()
 
+
+class LogStreamHttpServer(object):
+
+    def __init__(self):
+        self.tornado_proc = None
+
     @staticmethod
-    def _start_tornado_instance(log_path, port):
+    def _start_tornado_instance(port):
         app = tornado.web.Application(
             handlers=[(r'/', IndexHandler),
-                      (r'/tail', SocketHandler, {'log_path': log_path})],
+                      (r'/tail/(.*)/(.*)', SocketHandler)],
             template_path=os.path.join(os.path.dirname(__file__), 'resources'),
             # static_path = os.path.join(os.path.dirname(__file__), 'static'
         )
@@ -116,16 +141,20 @@ class LogStreamHttpServer(object):
         tornado.ioloop.IOLoop.instance().start()
 
     @contextmanager
-    def start(self, log_path, port):
-        if self.create_file:
-            self._create_log_file(log_path)
-            self.tornado_proc = Process(target=self._start_tornado_instance,
-                                        args=(log_path, port))
+    def with_start(self, port):
+
+        self.tornado_proc = Process(target=self._start_tornado_instance,
+                                    args=[port])
         try:
             self.tornado_proc.start()
             yield self
         finally:
-            self.tornado_proc.terminate()
+            self._close()
+
+    def start(self, port):
+        self.tornado_proc = Process(target=self._start_tornado_instance,
+                                    args=[port])
+        self.tornado_proc.start()
 
     def _join(self):
         self.tornado_proc.join()
@@ -137,9 +166,9 @@ class LogStreamHttpServer(object):
 streamer = LogStreamHttpServer()
 
 
-# if __name__ == '__main__':
-#     with streamer.start('/tmp/log.test', 7777) as stream:
-#         stream._join()
+if __name__ == '__main__':
+    with streamer.with_start(7777) as stream:
+        stream._join()
 
 
 # if __name__ == '__main__':

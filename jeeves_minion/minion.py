@@ -27,14 +27,15 @@ from jeeves_commons.constants import (NUM_MINION_WORKERS_ENV,
                                       POSTGRES_PASSWORD_ENV,
                                       DEFAULT_BROKER_PORT,
                                       DEFAULT_POSTGRES_PORT,
+                                      DEFAULT_RESULT_SOCKET_PORT,
                                       POSTGRES_RESULTS_DB,
                                       MINION_TASKS_QUEUE)
 
 
+from jeeves_minion.stream.logs import LogStreamHttpServer
 from jeeves_minion.docker_exec import DockerExecClient, DockerExecException
 
 from celery import Celery, bootsteps
-from celery.signals import worker_process_init
 from kombu import Consumer
 
 logger = create_logger('minion_logger',
@@ -77,21 +78,6 @@ backend_url = 'db+postgresql://{0}:{1}@{2}:{3}/{4}'.format(
 
 app = Celery(broker=broker_url,
              backend=backend_url)
-
-
-@worker_process_init.connect
-def fix_multiprocessing(**kwargs):
-    from multiprocessing import current_process
-    keys = {
-        '_authkey': '',
-        '_daemonic': False,
-        '_tempdir': ''
-        }
-    for k, v in keys.items():
-        try:
-            getattr(current_process(), k)
-        except AttributeError:
-            setattr(current_process(), k, v)
 
 
 # TODO: another task for stashing logs? in future..
@@ -258,6 +244,8 @@ class MinionBootstrapper(object):
         self.app = app
         # init minion ip address
         self.minion_ip = socket.gethostbyname(socket.gethostname())
+        # Create new minion in DB
+        self._create_minion()
         # Create a minion queue
         self._create_queue()
 
@@ -267,6 +255,7 @@ class MinionBootstrapper(object):
             _channel.queue_declare(queue=MINION_TASKS_QUEUE,
                                    durable=True)
 
+    def _create_minion(self):
         storage = create_storage_client()
         if not storage.minions.get(minion_ip=self.minion_ip):
             storage.minions.create(minion_ip=self.minion_ip,
@@ -274,11 +263,19 @@ class MinionBootstrapper(object):
         storage.close()
 
     def start(self):
+        # Start the tornado log streamer.
+        # TODO: this solution is only valid when running locally in docker.
+        #       Needs to be separated to a service.
+        self._start_log_server()
         self.app.start(shlex.split(CELERY_START_COMMAND))
+
+    @staticmethod
+    def _start_log_server():
+        streamer = LogStreamHttpServer()
+        streamer.start(DEFAULT_RESULT_SOCKET_PORT)
 
 
 if __name__ == '__main__':
-    # from jeeves_commons.storage import database
     # database.init_db()
     bs = MinionBootstrapper(app)
     for i in range(1):
