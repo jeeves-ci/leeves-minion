@@ -2,6 +2,7 @@ import os
 import logging
 from multiprocessing import Process
 from contextlib import contextmanager
+from pkg_resources import resource_filename
 
 import tornado.httpserver
 import tornado.ioloop
@@ -126,7 +127,7 @@ class LogStreamHttpServer(object):
         app = tornado.web.Application(
             handlers=[(r'/', IndexHandler),
                       (r'/tail/(.*)/(.*)', SocketHandler)],
-            template_path=os.path.join(os.path.dirname(__file__), 'resources'),
+            template_path=resource_filename('stream', 'resources'),
             # static_path = os.path.join(os.path.dirname(__file__), 'static'
         )
         # define('port',

@@ -20,6 +20,12 @@ setup(
         'docker==2.1',
         'tornado==4.2',
         'pyyaml',
-        'psycopg2'
-    ]
+        'psycopg2',
+    ],
+    package_data={
+        'jeeves_minion': ['stream/resources/*.html'],
+        'jeeves_minion.stream': ['resources/static/*.js'],
+        'web_ui.resources': ['static/*.js'],
+    },
+    include_package_data=True,
 )
