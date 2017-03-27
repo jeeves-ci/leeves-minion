@@ -107,7 +107,8 @@ class SocketHandler(tornado.websocket.WebSocketHandler):
 
     def write_line_to_client(self, data):
         logging.info('Returning to client: %s' % data.strip())
-        self.write_message(data.strip().replace('\n', '<br/>') + '<br/>')
+        self.write_message(data.strip().replace('\n', '<br/>') +
+                           '<br/>' + '\n')
 
     @staticmethod
     def _create_log_file(log_path):
