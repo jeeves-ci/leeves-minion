@@ -159,10 +159,15 @@ class DockerExecClient(object):
 
     def _pull_image(self, stream=None):
         image_name, tag = self.base_image.split(':')
-        for line in self.api.pull(image_name, tag=tag, stream=stream):
-            progress = json.loads(line).get('progress', None)
-            if progress:
-                print(json.dumps(json.loads(line).get('progress'), indent=4))
+        if stream:
+            for line in self.api.pull(image_name, tag=tag, stream=True):
+                progress = json.loads(line).get('progress', None)
+                if progress:
+                    # Consider aggregating to task logs.
+                    print (json.dumps(json.loads(line).get('progress'),
+                                      indent=4))
+        else:
+            self.api.pull(image_name, tag=tag, stream=False)
 
     def safe_close(self):
         if self.container_id:
