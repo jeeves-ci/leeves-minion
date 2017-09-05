@@ -130,7 +130,7 @@ def execute_install_task(task_id):
                   ' Skipping execution of {1}.'.format(str(failed),
                                                        task.task_name)
             logger.info(msg)
-            raise RuntimeError(msg)
+            raise DockerExecException(msg)
     except DockerExecException as e:
         logger.info(e.message)
         storage_client.tasks.update(task_id=task.task_id,
@@ -150,7 +150,7 @@ def execute_install_task(task_id):
 def _handle_execution_error(failed_task, storage_client):
     logger.debug('Revoking task tree for task {0}'.format(failed_task.task_id))
     publisher.revoke_task_tree(failed_task)
-    storage_client.workflows.update(workflow_id=failed_task.workflow_id,
+    storage_client.workflows.update(wf_id=failed_task.workflow_id,
                                     status='FAILURE')
 
 
@@ -278,16 +278,16 @@ class MinionBootstrapper(object):
 if __name__ == '__main__':
     # database.init_db()
     bs = MinionBootstrapper(app)
-    for i in range(1):
-        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                               '../resources/examples',
-                               'jeeves_workflow.yaml'),
-                  'r') as workflow_stream:
-            workflow = yaml.load(workflow_stream)
-        workflow_id = str(uuid.uuid4())
-        _, tasks = storage_utils.create_workflow(get_storage_client(),
-                                                 workflow,
-                                                 workflow_id=workflow_id)
-        for task_item in tasks:
-            publisher.send_task_message(task_item.task_id)
+    # for i in range(1):
+    #     with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),
+    #                            '../resources/examples',
+    #                            'jeeves_workflow.yaml'),
+    #               'r') as workflow_stream:
+    #         workflow = yaml.load(workflow_stream)
+    #     workflow_id = str(uuid.uuid4())
+    #     _, tasks = storage_utils.create_workflow(get_storage_client(),
+    #                                              workflow,
+    #                                              workflow_id=workflow_id)
+    #     for task_item in tasks:
+    #         publisher.send_task_message(task_item.task_id)
     bs.start()
