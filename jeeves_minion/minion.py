@@ -1,7 +1,5 @@
 import os
-import yaml
 import json
-import uuid
 import shlex
 import socket
 import logging
@@ -11,7 +9,7 @@ from tempfile import gettempdir
 
 from jeeves_commons.storage.storage import (get_storage_client,
                                             create_storage_client)
-from jeeves_commons.storage import utils as storage_utils
+# from jeeves_commons.storage import utils as storage_utils
 
 from jeeves_commons.dsl import parser
 from jeeves_commons.queue import publisher
@@ -151,7 +149,8 @@ def _handle_execution_error(failed_task, storage_client):
     logger.debug('Revoking task tree for task {0}'.format(failed_task.task_id))
     publisher.revoke_task_tree(failed_task)
     storage_client.workflows.update(wf_id=failed_task.workflow_id,
-                                    status='FAILURE')
+                                    status='FAILURE',
+                                    ended_At=datetime.datetime.now())
 
 
 def _handle_execution_success(task, env, storage_client):
@@ -160,14 +159,17 @@ def _handle_execution_success(task, env, storage_client):
     workflow_env.update(env)
 
     workflow_status = None
+    workflow_end_time = None
     succeeded_tasks = storage_client.tasks.list(task.workflow_id,
                                                 status='SUCCESS')
     if len(workflow.tasks) == len(succeeded_tasks) + 1:
         workflow_status = 'SUCCESS'
+        workflow_end_time = datetime.datetime.now()
 
     storage_client.workflows.update(task.workflow_id,
                                     env_result=json.dumps(workflow_env),
-                                    status=workflow_status)
+                                    status=workflow_status,
+                                    ended_at=workflow_end_time)
 
 
 def wait_for_tasks(task_ids, storage_client):
@@ -231,7 +233,7 @@ class MinionConsumerStep(bootsteps.ConsumerStep):
             get_storage_client().workflows.update(
                 task.workflow_id,
                 status='STARTED',
-                started_at=str(datetime.datetime.now()))
+                started_at=datetime.datetime.now())
 
         message.ack()
 
