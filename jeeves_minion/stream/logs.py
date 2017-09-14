@@ -34,7 +34,9 @@ class SocketHandler(tornado.websocket.WebSocketHandler):
         self.task_id = task_id
         log_path = self._get_log_path(workflow_id, task_id)
         if not os.path.isfile(log_path):
-            self._create_log_file()
+            # TODO: Task didn't start yet. Send notification instead of
+            # creating a file.
+            self._create_log_file(log_path)
         self._send_existing_data(log_path)
 
         self._add_client()
