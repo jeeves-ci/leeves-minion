@@ -108,7 +108,7 @@ class DockerExecClient(object):
         command = EXEC_COMMAND_TEMPLATE.format(script=env_script,
                                                file=env_file)
         if stdout:
-            command += ' >{0} 2>&1'.format(self.exec_out_log)
+            command += ' >>{0} 2>&1'.format(self.exec_out_log)
         print 'Create env command created: {0}'.format(command)
         return command
 
