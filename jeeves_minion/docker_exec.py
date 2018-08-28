@@ -119,7 +119,7 @@ class DockerExecClient(object):
                                  .format(time_stamp=create_time))
         command = EXEC_COMMAND_TEMPLATE.format(script=script,
                                                file=task_file)
-        command += ' >{0} 2>&1'.format(self.exec_out_log)
+        command += ' >>{0} 2>&1'.format(self.exec_out_log)
         return command
 
     def _convert_env_file_to_dict(self, env_file):
