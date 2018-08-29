@@ -150,7 +150,7 @@ def _handle_execution_error(failed_task, storage_client):
     publisher.revoke_task_tree(failed_task)
     storage_client.workflows.update(wf_id=failed_task.workflow_id,
                                     status='FAILURE',
-                                    ended_At=datetime.datetime.now())
+                                    ended_at=datetime.datetime.now())
 
 
 def _handle_execution_success(task, env, storage_client):
@@ -280,7 +280,10 @@ class MinionBootstrapper(object):
 if __name__ == '__main__':
     # database.init_db()
     bs = MinionBootstrapper(app)
-    # for i in range(1):
+    # import uuid
+    # import yaml
+    # from jeeves_commons.storage import utils as storage_utils
+    # for i in range(10):
     #     with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),
     #                            '../resources/examples',
     #                            'jeeves_workflow.yaml'),
