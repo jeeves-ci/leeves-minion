@@ -183,7 +183,7 @@ def _handle_execution_start(task, storage_client):
         minion_ip=socket.gethostbyname(socket.gethostname()))
 
     workflow = storage_client.workflows.get(task.workflow_id)
-    if workflow.status not in ('FAILURE', 'SUCCESS', 'STARTED', 'REVOKED'):
+    if workflow.status not in ('FAILURE', 'STARTED', 'REVOKED'):
         # Update the workflow status
         storage_client.workflows.update(
             task.workflow_id,
