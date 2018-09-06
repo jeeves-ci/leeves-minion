@@ -16,7 +16,7 @@ setup(
     description='Jeeves-CI is a distributed task engine for dispatching jobs '
                 'on clean docker/vms environments across workers.',
     install_requires=[
-        'celery==4.1.1',
+        'celery==4.2.1',
         'docker==2.1',
         'tornado==4.2',
         'pyyaml',

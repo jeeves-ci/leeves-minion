@@ -80,12 +80,13 @@ app = Celery(broker=broker_url,
 
 # TODO: another task for stashing logs? in future..
 
-@app.task(name="run_script_in_container", max_retries=1)
+@app.task(name="run_script_in_container", max_retries=0)
 def execute_install_task(task_id):
     from jeeves_commons.storage.storage import create_storage_client
     storage_client = create_storage_client()
 
     task = storage_client.tasks.get(task_id=task_id)
+    _handle_execution_start(task, storage_client)
     dependencies = json.loads(task.task_dependencies)
     task_obj = parser.get_task(json.loads(task.content))
 
@@ -127,10 +128,9 @@ def execute_install_task(task_id):
             msg = 'One or more task dependencies failed \'{0}\'.' \
                   ' Skipping execution of {1}.'.format(str(failed),
                                                        task.task_name)
-            logger.info(msg)
             raise DockerExecException(msg)
     except DockerExecException as e:
-        logger.info(e.message)
+        logger.debug('Docker execution error: {}', e)
         storage_client.tasks.update(task_id=task.task_id,
                                     status='FAILURE',
                                     result=e.result)
@@ -146,11 +146,12 @@ def execute_install_task(task_id):
 
 
 def _handle_execution_error(failed_task, storage_client):
-    logger.debug('Revoking task tree for task {0}'.format(failed_task.task_id))
-    publisher.revoke_task_tree(failed_task)
-    storage_client.workflows.update(wf_id=failed_task.workflow_id,
+    storage_client.workflows.update(failed_task.workflow_id,
                                     status='FAILURE',
                                     ended_at=datetime.datetime.now())
+    storage_client.commit()
+    logger.debug('Revoking task tree for task {0}'.format(failed_task.task_id))
+    publisher.revoke_task_tree(failed_task)
 
 
 def _handle_execution_success(task, env, storage_client):
@@ -170,6 +171,25 @@ def _handle_execution_success(task, env, storage_client):
                                     env_result=json.dumps(workflow_env),
                                     status=workflow_status,
                                     ended_at=workflow_end_time)
+    storage_client.commit()
+
+
+def _handle_execution_start(task, storage_client):
+    # Update the task status
+    storage_client.tasks.update(
+        task_id=task.task_id,
+        status='STARTED',
+        started_at=str(datetime.datetime.now()),
+        minion_ip=socket.gethostbyname(socket.gethostname()))
+
+    workflow = storage_client.workflows.get(task.workflow_id)
+    if workflow.status not in ('FAILURE', 'SUCCESS', 'STARTED', 'REVOKED'):
+        # Update the workflow status
+        storage_client.workflows.update(
+            task.workflow_id,
+            status='STARTED',
+            started_at=datetime.datetime.now())
+    storage_client.commit()
 
 
 def wait_for_tasks(task_ids, storage_client):
@@ -210,33 +230,16 @@ class MinionConsumerStep(bootsteps.ConsumerStep):
                          accept=['json'])]
 
     def handle_message(self, body, message):
+        message.ack()
         task = get_storage_client().tasks.get(task_id=body)
         if task.status == 'REVOKED_MANUALLY':
             logger.debug('Task with ID {0} was manually revoked'.format(body))
-            message.ack()
             return
 
         # Execute task async
         execute_install_task.apply_async(
                                    args=[task.task_id],
                                    task_id=task.task_id)
-        # Update the task status
-        get_storage_client().tasks.update(
-            task_id=task.task_id,
-            status='STARTED',
-            started_at=str(datetime.datetime.now()),
-            minion_ip=socket.gethostbyname(socket.gethostname()))
-
-        workflow = get_storage_client().workflows.get(task.workflow_id)
-        if workflow.status not in ('FAILURE', 'SUCCESS', 'STARTED', 'REVOKED'):
-            # Update the workflow status
-            get_storage_client().workflows.update(
-                task.workflow_id,
-                status='STARTED',
-                started_at=datetime.datetime.now())
-
-        message.ack()
-
 
 app.steps['consumer'].add(MinionConsumerStep)
 
@@ -262,6 +265,7 @@ class MinionBootstrapper(object):
         if not storage.minions.get(minion_ip=self.minion_ip):
             storage.minions.create(minion_ip=self.minion_ip,
                                    status='STARTED')
+        storage.commit()
         storage.close()
 
     def start(self):
