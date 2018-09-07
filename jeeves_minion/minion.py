@@ -49,15 +49,15 @@ CELERY_START_COMMAND = 'celery -A minion worker --concurrency {0} ' \
 
 # Get message broker details
 MESSAGE_BROKER_HOST_IP = os.getenv(RABBITMQ_HOST_IP_ENV, '172.17.0.3')
-MESSAGE_BROKER_HOST_PORT = os.getenv(RABBITMQ_HOST_PORT_ENV,
-                                     DEFAULT_BROKER_PORT)
+MESSAGE_BROKER_HOST_PORT = int(os.getenv(RABBITMQ_HOST_PORT_ENV,
+                                         DEFAULT_BROKER_PORT))
 MESSAGE_BROKER_USERNAME = os.getenv(RABBITMQ_USERNAME_ENV, 'guest')
 MESSAGE_BROKER_PASSWORD = os.getenv(RABBITMQ_PASSWORD_ENV, 'guest')
 
 # Get the result handler details
 RESULTS_BACKEND_HOST_IP = os.getenv(POSTGRES_HOST_IP_ENV, '172.17.0.2')
-RESULTS_BACKEND_HOST_PORT = os.getenv(POSTGRES_HOST_PORT_ENV,
-                                      DEFAULT_POSTGRES_PORT)
+RESULTS_BACKEND_HOST_PORT = int(os.getenv(POSTGRES_HOST_PORT_ENV,
+                                          DEFAULT_POSTGRES_PORT))
 RESULTS_BACKEND_USERNAME = os.getenv(POSTGRES_USERNAME_ENV, 'postgres')
 RESULTS_BACKEND_PASSWORD = os.getenv(POSTGRES_PASSWORD_ENV, 'postgres')
 
