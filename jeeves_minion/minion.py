@@ -120,7 +120,8 @@ def execute_install_task(task_id):
                          .format(task.task_name, task.task_id))
             script_logs, script_env = exec_client.run_script(
                 task_obj.script,
-                env=env)
+                env=env,
+                final=True)
 
             _handle_execution_success(task, script_env, storage_client)
             logger.debug('Task {} ended successfully'.format(task.task_name))
@@ -240,6 +241,7 @@ class MinionConsumerStep(bootsteps.ConsumerStep):
         execute_install_task.apply_async(
                                    args=[task.task_id],
                                    task_id=task.task_id)
+
 
 app.steps['consumer'].add(MinionConsumerStep)
 

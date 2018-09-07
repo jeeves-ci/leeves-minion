@@ -59,7 +59,7 @@ class DockerExecClient(object):
         return self.container_id
 
     # whats up with timeout?
-    def run_script(self, script, env={}):
+    def run_script(self, script, env={}, final=False):
         if not self._image_exists():
             self._pull_image()
 
@@ -75,8 +75,11 @@ class DockerExecClient(object):
 
         output = self._read_output()
         if exec_res['ExitCode'] != 0:
+            self._write('exist code: {}'.format(exec_res['ExitCode']), 'red')
             raise DockerExecException(message='Script execution failed.',
                                       result=output)
+        if final:
+            self._write('all is well that ends well..')
         result_env = self._create_env_result()
         return output, result_env
 
@@ -84,6 +87,11 @@ class DockerExecClient(object):
         with open(self.exec_out_log, 'r') as f:
             output = f.read()
         return output
+
+    def _write(self, message, color='green'):
+        with open(self.exec_out_log, 'a') as f:
+            f.write('<font color="{0}">{1}</font>'.
+                    format(color, message + os.linesep))
 
     def _create_exec(self, script, env):
         pre_dump_env_cmd = self._create_dump_env_command(PRE_ENV_FILE_NAME)
