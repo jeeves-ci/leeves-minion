@@ -10,7 +10,7 @@ ENV RABBITMQ_PASSWORD_ENV ""
 
 RUN git clone https://github.com/jeeves-ci/jeeves-minion.git \
     && cd jeeves-minion \
-    && git checkout 0.1 \
+    && git checkout master \
     && pip install -r requirements.txt .
 
 # task result files
