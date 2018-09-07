@@ -7,6 +7,9 @@ import datetime
 from time import sleep
 from tempfile import gettempdir
 
+from jeeves_minion.stream.logs import LogStreamHttpServer
+from jeeves_minion.docker_exec import DockerExecClient, DockerExecException
+
 from jeeves_commons.storage.storage import (get_storage_client,
                                             create_storage_client)
 # from jeeves_commons.storage import utils as storage_utils
@@ -28,10 +31,6 @@ from jeeves_commons.constants import (NUM_MINION_WORKERS_ENV,
                                       DEFAULT_RESULT_SOCKET_PORT,
                                       POSTGRES_RESULTS_DB,
                                       MINION_TASKS_QUEUE)
-
-
-from jeeves_minion.stream.logs import LogStreamHttpServer
-from jeeves_minion.docker_exec import DockerExecClient, DockerExecException
 
 from celery import Celery, bootsteps
 from kombu import Consumer
