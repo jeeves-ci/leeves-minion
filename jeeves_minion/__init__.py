@@ -5,10 +5,19 @@ from jeeves_commons.constants import (RABBITMQ_HOST_IP_ENV,
                                       RABBITMQ_HOST_PORT_ENV,
                                       DEFAULT_BROKER_PORT)
 
-print 'waiting for rabbitmq service...'
-connected = wait_for_port(host=os.getenv(RABBITMQ_HOST_IP_ENV, '172.17.0.3'),
-                          port=int(os.getenv(RABBITMQ_HOST_PORT_ENV,
-                                             DEFAULT_BROKER_PORT)),
-                          duration=30)
-if not connected:
-    raise RuntimeError('failed waiting for rabbitmq broker')
+try:
+    rabbitmq_port = int(os.getenv(RABBITMQ_HOST_PORT_ENV,
+                                  DEFAULT_BROKER_PORT))
+except ValueError:
+    rabbitmq_port = DEFAULT_BROKER_PORT
+
+
+def wait():
+    print 'waiting for rabbitmq service...'
+    connected = wait_for_port(host=os.getenv(RABBITMQ_HOST_IP_ENV, '172.17.0.3'),
+                              port=rabbitmq_port,
+                              duration=30)
+    if not connected:
+        raise RuntimeError('failed waiting for rabbitmq broker')
+
+wait()
