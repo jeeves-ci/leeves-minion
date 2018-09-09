@@ -181,6 +181,7 @@ def _handle_execution_start(task, storage_client):
         status='STARTED',
         started_at=str(datetime.datetime.now()),
         minion_ip=socket.gethostbyname(socket.gethostname()))
+    storage_client.commit()
 
     workflow = storage_client.workflows.get(task.workflow_id)
     if workflow.status not in ('FAILURE', 'STARTED', 'REVOKED'):
@@ -232,7 +233,10 @@ class MinionConsumerStep(bootsteps.ConsumerStep):
     def handle_message(self, body, message):
         message.ack()
         task = get_storage_client().tasks.get(task_id=body)
-        if task.status == 'REVOKED_MANUALLY':
+        if task is None:
+            logger.debug("Task with ID {0} does not exist in DB".format(body))
+            return
+        elif task.status == 'REVOKED_MANUALLY':
             logger.debug('Task with ID {0} was manually revoked'.format(body))
             return
 
