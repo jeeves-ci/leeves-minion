@@ -19,8 +19,8 @@ setup(
         'celery==4.2.1',
         'docker==2.1',
         'tornado==4.2',
-        'pyyaml',
-        'psycopg2',
+        'pyyaml==3.13',
+        'psycopg2==2.7.1',
     ],
     package_data={
         'jeeves_minion': ['stream/resources/*.html'],

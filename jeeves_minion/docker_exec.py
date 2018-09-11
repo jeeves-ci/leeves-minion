@@ -1,6 +1,9 @@
 import os
 import json
 import time
+import logging
+
+from jeeves_commons.utils import create_logger
 
 import docker
 
@@ -12,6 +15,9 @@ EXEC_COMMAND_TEMPLATE = ('echo "set -e" >> {file} && '
 EXEC_OUTPUT_FILE_NAME = 'output.log'
 PRE_ENV_FILE_NAME = 'pre_env.sh'
 POST_ENV_FILE_NAME = 'post_env.sh'
+
+logger = create_logger('docker_exec',
+                       level=logging.DEBUG)
 
 
 class DockerExecClient(object):

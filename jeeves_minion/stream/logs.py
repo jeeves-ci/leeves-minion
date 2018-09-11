@@ -3,6 +3,7 @@ import logging
 from multiprocessing import Process
 from contextlib import contextmanager
 from pkg_resources import resource_filename
+from tempfile import gettempdir
 
 import tornado.httpserver
 import tornado.ioloop
@@ -22,8 +23,12 @@ class SocketHandler(tornado.websocket.WebSocketHandler):
     tail_procs = {}
     cat_proc = None
 
+    def initialize(self, workdir_base):
+        self.workdir_base = workdir_base
+
     def __init__(self, *args, **kwargs):
         self.task_id = None
+        self.workdir_base = None
         super(SocketHandler, self).__init__(*args, **kwargs)
 
     def send_to_all(self, message):
@@ -43,9 +48,8 @@ class SocketHandler(tornado.websocket.WebSocketHandler):
         if not SocketHandler.tail_procs.get(task_id):
             self._start_data_stream(log_path)
 
-    @staticmethod
-    def _get_log_path(workflow_id, task_id):
-        return os.path.join('/tmp',
+    def _get_log_path(self, workflow_id, task_id):
+        return os.path.join(self.workdir_base,
                             workflow_id,
                             task_id,
                             '{}.log'.format(task_id))
@@ -122,14 +126,15 @@ class SocketHandler(tornado.websocket.WebSocketHandler):
 
 class LogStreamHttpServer(object):
 
-    def __init__(self):
+    def __init__(self, workdir_base):
+        self.workdir_base = workdir_base
         self.tornado_proc = None
 
-    @staticmethod
-    def _start_tornado_instance(port):
+    def _start_tornado_instance(self, port):
         app = tornado.web.Application(
             handlers=[(r'/', IndexHandler),
-                      (r'/tail/(.*)/(.*)', SocketHandler)],
+                      (r'/tail/(.*)/(.*)', SocketHandler,
+                       dict(workdir_base=self.workdir_base))],
             template_path=resource_filename('stream', 'resources'),
             # static_path = os.path.join(os.path.dirname(__file__), 'static'
         )
@@ -167,15 +172,8 @@ class LogStreamHttpServer(object):
         self.tornado_proc.terminate()
 
 
-streamer = LogStreamHttpServer()
-
-
 if __name__ == '__main__':
+    streamer = LogStreamHttpServer(os.path.join(gettempdir(),
+                                                'jeeves-minion-work-dir'))
     with streamer.with_start(7777) as stream:
         stream._join()
-
-
-# if __name__ == '__main__':
-#     streamer = LogStreamHttpServer('/tmp/log.test', 7777)
-#     streamer.start()
-#     streamer._join()

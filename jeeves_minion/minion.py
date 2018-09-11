@@ -5,19 +5,17 @@ import socket
 import logging
 import datetime
 from time import sleep
-from tempfile import gettempdir
 
 from jeeves_minion.stream.logs import LogStreamHttpServer
 from jeeves_minion.docker_exec import DockerExecClient, DockerExecException
 
 from jeeves_commons.storage.storage import (get_storage_client,
                                             create_storage_client)
-# from jeeves_commons.storage import utils as storage_utils
 
 from jeeves_commons.dsl import parser
 from jeeves_commons.queue import publisher
-from jeeves_commons.utils import open_channel, create_logger
 from jeeves_commons.constants import (NUM_MINION_WORKERS_ENV,
+                                      MINION_WORKDIR_PATH_ENV,
                                       RABBITMQ_HOST_IP_ENV,
                                       RABBITMQ_HOST_PORT_ENV,
                                       RABBITMQ_USERNAME_ENV,
@@ -27,10 +25,12 @@ from jeeves_commons.constants import (NUM_MINION_WORKERS_ENV,
                                       POSTGRES_USERNAME_ENV,
                                       POSTGRES_PASSWORD_ENV,
                                       DEFAULT_BROKER_PORT,
+                                      DEFAULT_WORKDIR_PATH,
                                       DEFAULT_POSTGRES_PORT,
                                       DEFAULT_RESULT_SOCKET_PORT,
                                       POSTGRES_RESULTS_DB,
                                       MINION_TASKS_QUEUE)
+from jeeves_commons.utils import open_channel, create_logger
 
 from celery import Celery, bootsteps
 from kombu import Consumer
@@ -40,6 +40,7 @@ logger = create_logger('minion_logger',
 
 # Get the number of workers per Jeeves minion. Default is set to 4.
 NUM_MINION_WORKERS = os.getenv(NUM_MINION_WORKERS_ENV, '4')
+MINION_WORKDIR_PATH = os.getenv(MINION_WORKDIR_PATH_ENV, DEFAULT_WORKDIR_PATH)
 
 CELERY_START_COMMAND = 'celery -A minion worker --concurrency {0} ' \
                        '--config jeeves_minion.celeryconfig ' \
@@ -89,7 +90,9 @@ def execute_install_task(task_id):
     dependencies = json.loads(task.task_dependencies)
     task_obj = parser.get_task(json.loads(task.content))
 
-    workdir = os.path.join(gettempdir(), task.workflow_id, task.task_id)
+    workdir = os.path.join(MINION_WORKDIR_PATH,
+                           task.workflow_id,
+                           task.task_id)
     log_file = os.path.join(workdir, '{0}.log'.format(task.task_id))
     exec_client = DockerExecClient(base_image=task_obj.env.image,
                                    workdir=workdir,
@@ -126,15 +129,16 @@ def execute_install_task(task_id):
             logger.debug('Task {} ended successfully'.format(task.task_name))
         else:
             msg = 'One or more task dependencies failed \'{0}\'.' \
-                  ' Skipping execution of {1}.'.format(str(failed),
-                                                       task.task_name)
+                  ' Skipping execution of {1}.'.\
+                  format(str(failed), task.task_name)
             raise DockerExecException(msg)
     except DockerExecException as e:
-        logger.debug('Docker execution error: {}', e)
-        storage_client.tasks.update(task_id=task.task_id,
-                                    status='FAILURE',
-                                    result=e.result)
-        _handle_execution_error(task, storage_client)
+        logger.debug('Docker execution error: {}'.format(e.message))
+        _handle_execution_error(task, e.message, storage_client)
+        raise RuntimeError(e.message)
+    except Exception as e:
+        logger.debug('Task encountered and error: {}', e)
+        _handle_execution_error(task, e.message, storage_client)
         raise RuntimeError(e.message)
     finally:
         storage_client.close()
@@ -145,7 +149,10 @@ def execute_install_task(task_id):
     return output
 
 
-def _handle_execution_error(failed_task, storage_client):
+def _handle_execution_error(failed_task, error_msg, storage_client):
+    storage_client.tasks.update(task_id=failed_task.task_id,
+                                status='FAILURE',
+                                result=error_msg)
     storage_client.workflows.update(failed_task.workflow_id,
                                     status='FAILURE',
                                     ended_at=datetime.datetime.now())
@@ -181,7 +188,6 @@ def _handle_execution_start(task, storage_client):
         status='STARTED',
         started_at=str(datetime.datetime.now()),
         minion_ip=socket.gethostbyname(socket.gethostname()))
-    storage_client.commit()
 
     workflow = storage_client.workflows.get(task.workflow_id)
     if workflow.status not in ('FAILURE', 'STARTED', 'REVOKED'):
@@ -234,7 +240,7 @@ class MinionConsumerStep(bootsteps.ConsumerStep):
         message.ack()
         task = get_storage_client().tasks.get(task_id=body)
         if task is None:
-            logger.debug("Task with ID {0} does not exist in DB".format(body))
+            logger.error('Task with ID {0} does not exist in DB'.format(body))
             return
         elif task.status == 'REVOKED_MANUALLY':
             logger.debug('Task with ID {0} was manually revoked'.format(body))
@@ -282,7 +288,7 @@ class MinionBootstrapper(object):
 
     @staticmethod
     def _start_log_server():
-        streamer = LogStreamHttpServer()
+        streamer = LogStreamHttpServer(MINION_WORKDIR_PATH)
         streamer.start(DEFAULT_RESULT_SOCKET_PORT)
 
 
