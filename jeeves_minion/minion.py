@@ -298,6 +298,7 @@ if __name__ == '__main__':
     # import uuid
     # import yaml
     # from jeeves_commons.storage import utils as storage_utils
+    # from jeeves_commons.random_constants import get_random_name
     # for i in range(10):
     #     with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),
     #                            '../resources/examples',
@@ -306,7 +307,8 @@ if __name__ == '__main__':
     #         workflow = yaml.load(workflow_stream)
     #     workflow_id = str(uuid.uuid4())
     #     _, tasks = storage_utils.create_workflow(get_storage_client(),
-    #                                              workflow,
+    #                                              name=get_random_name(0),
+    #                                              content=workflow,
     #                                              workflow_id=workflow_id)
     #     for task_item in tasks:
     #         publisher.send_task_message(task_item.task_id)
