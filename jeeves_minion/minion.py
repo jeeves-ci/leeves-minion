@@ -91,7 +91,7 @@ def execute_install_task(task_id):
     task_obj = parser.get_task(json.loads(task.content))
 
     workdir = os.path.join(MINION_WORKDIR_PATH,
-                           task.workflow_id,
+                           str(task.workflow_id),
                            task.task_id)
     log_file = os.path.join(workdir, '{0}.log'.format(task.task_id))
     exec_client = DockerExecClient(base_image=task_obj.env.image,
@@ -99,7 +99,8 @@ def execute_install_task(task_id):
                                    log_file=log_file)
 
     try:
-        env = json.loads(storage_client.workflows.get(task.workflow_id).env)
+        env = json.loads(storage_client.workflows.
+                         get(workflow_id=task.workflow_id).env)
         logger.debug('Executing pre-script for task \'{0}\' with ID {1}. '
                      'Env is: {2}'
                      .format(task.task_name, task.task_id, str(env)))
@@ -114,8 +115,8 @@ def execute_install_task(task_id):
         logger.debug('Dependency results are (success: {0}, failure: {1})'
                      .format(succeeded, failed))
         if not failed:
-            env = json.loads(storage_client.workflows.get(task.workflow_id)
-                             .env_result)
+            env = json.loads(storage_client.workflows.
+                             get(workflow_id=task.workflow_id).env_result)
             env.update(pre_env)
             # Run script
             logger.debug('executing script for task \'{0}\' with ID {1}'
@@ -189,7 +190,7 @@ def _handle_execution_start(task, storage_client):
         started_at=str(datetime.datetime.now()),
         minion_ip=socket.gethostbyname(socket.gethostname()))
 
-    workflow = storage_client.workflows.get(task.workflow_id)
+    workflow = storage_client.workflows.get(workflow_id=task.workflow_id)
     if workflow.status not in ('FAILURE', 'STARTED', 'REVOKED'):
         # Update the workflow status
         storage_client.workflows.update(
@@ -295,7 +296,6 @@ class MinionBootstrapper(object):
 if __name__ == '__main__':
     # database.init_db()
     bs = MinionBootstrapper(app)
-    # import uuid
     # import yaml
     # from jeeves_commons.storage import utils as storage_utils
     # from jeeves_commons.random_constants import get_random_name
@@ -305,11 +305,10 @@ if __name__ == '__main__':
     #                            'jeeves_workflow.yaml'),
     #               'r') as workflow_stream:
     #         workflow = yaml.load(workflow_stream)
-    #     workflow_id = str(uuid.uuid4())
     #     _, tasks = storage_utils.create_workflow(get_storage_client(),
     #                                              name=get_random_name(0),
     #                                              content=workflow,
-    #                                              workflow_id=workflow_id)
+    #                                              tenant_id=1)
     #     for task_item in tasks:
     #         publisher.send_task_message(task_item.task_id)
     bs.start()
