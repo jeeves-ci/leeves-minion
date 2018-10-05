@@ -187,7 +187,7 @@ def _handle_execution_start(task, storage_client):
     storage_client.tasks.update(
         task_id=task.task_id,
         status='STARTED',
-        started_at=str(datetime.datetime.now()),
+        started_at=datetime.datetime.now(),
         minion_ip=socket.gethostbyname(socket.gethostname()))
 
     workflow = storage_client.workflows.get(workflow_id=task.workflow_id)

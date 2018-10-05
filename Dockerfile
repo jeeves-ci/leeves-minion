@@ -1,14 +1,19 @@
 FROM "python:2.7"
 
+ENV POSTGRES_HOST_IP_ENV ""
 ENV POSTGRES_HOST_PORT_ENV ""
 ENV POSTGRES_USERNAME_ENV ""
 ENV POSTGRES_PASSWORD_ENV ""
 
+ENV RABBITMQ_HOST_IP_ENV ""
 ENV RABBITMQ_HOST_PORT_ENV ""
 ENV RABBITMQ_USERNAME_ENV ""
 ENV RABBITMQ_PASSWORD_ENV ""
 
+# the number of async workers for minion
+ENV NUM_MINION_WORKERS_ENV "4"
 ENV MINION_WORKDIR_PATH_ENV "/tmp/jeeves-minion-work-dir"
+
 
 RUN git clone https://github.com/jeeves-ci/jeeves-minion.git \
     && cd jeeves-minion \
